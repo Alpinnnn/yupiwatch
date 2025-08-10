@@ -235,25 +235,15 @@ class _VideoThumbnailWidgetState extends State<VideoThumbnailWidget> {
       _hasError = false;
     });
 
-    try {
-      final thumbnailPath =
-          await VideoService.instance.generateThumbnail(widget.video.path);
+    // Skip thumbnail generation dan langsung show error state
+    await Future.delayed(Duration(milliseconds: 500));
 
-      if (mounted) {
-        setState(() {
-          _thumbnailPath = thumbnailPath;
-          _isLoading = false;
-          _hasError = thumbnailPath == null;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error generating thumbnail: $e');
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _hasError = true;
-        });
-      }
+    if (mounted) {
+      setState(() {
+        _thumbnailPath = null;
+        _isLoading = false;
+        _hasError = true; // Always show play icon instead
+      });
     }
   }
 

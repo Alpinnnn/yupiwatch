@@ -1,6 +1,7 @@
 // main.dart - Entry point aplikasi video player
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart'; // Tambahkan import ini
 import 'screens/home_screen.dart';
 import 'utils/constants.dart';
 
@@ -10,6 +11,8 @@ import 'utils/constants.dart';
 void main() async {
   // Pastikan Flutter binding diinisialisasi sebelum runApp
   WidgetsFlutterBinding.ensureInitialized();
+
+  MediaKit.ensureInitialized();
 
   // Set orientasi default ke portrait
   await SystemChrome.setPreferredOrientations([
