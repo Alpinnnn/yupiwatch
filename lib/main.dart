@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart'; // Tambahkan import ini
 import 'screens/home_screen.dart';
 import 'utils/constants.dart';
+import 'services/discord_presence_service.dart';
 
 /// Entry point utama aplikasi
 /// Memastikan binding Flutter diinisialisasi dengan benar
@@ -13,6 +14,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   MediaKit.ensureInitialized();
+
+  // Initialize Discord Rich Presence
+  await DiscordPresenceService.instance.initialize();
 
   // Set orientasi default ke portrait
   await SystemChrome.setPreferredOrientations([

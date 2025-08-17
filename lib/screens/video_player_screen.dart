@@ -5,14 +5,19 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'dart:io';
 import '../services/video_service.dart';
+import '../services/discord_presence_service.dart';
 import '../utils/constants.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   final VideoItem video;
+  final String? folderName;
+  final bool isManuallyPicked;
 
   const VideoPlayerScreen({
     Key? key,
     required this.video,
+    this.folderName,
+    this.isManuallyPicked = false,
   }) : super(key: key);
 
   @override
@@ -27,15 +32,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _isLoading = true;
   String? _errorMessage;
   bool _isFullscreen = false;
+  
+  // Discord presence service instance
+  final DiscordPresenceService _discordService = DiscordPresenceService.instance;
 
   @override
   void initState() {
     super.initState();
     _initializePlayer();
+    
+    // Update Discord presence to show video player status
+    debugPrint('VideoPlayerScreen - folderName: ${widget.folderName}, isManuallyPicked: ${widget.isManuallyPicked}');
+    _discordService.setVideoPlayerStatus(
+      widget.video.name,
+      folderName: widget.folderName,
+      isManuallyPicked: widget.isManuallyPicked,
+    );
   }
 
   @override
   void dispose() {
+    // Reset Discord presence to main menu when leaving video player
+    _discordService.setMainMenuStatus();
     player.dispose();
     super.dispose();
   }
@@ -68,6 +86,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             _errorMessage = 'Playback error: ${error.toString()}';
             _isLoading = false;
           });
+        }
+      });
+
+      // Add listener untuk progress tracking untuk Discord Rich Presence
+      player.stream.position.listen((position) {
+        if (mounted) {
+          _discordService.updateVideoProgress(position, player.state.duration);
         }
       });
 

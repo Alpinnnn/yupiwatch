@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'package:file_picker/file_picker.dart';
 import '../services/video_service.dart';
+import '../services/discord_presence_service.dart';
 import '../widgets/video_list_widget.dart';
 import '../widgets/folder_list_widget.dart';
 import '../utils/constants.dart';
@@ -24,6 +25,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // Video service instance
   final VideoService _videoService = VideoService.instance;
+  
+  // Discord presence service instance
+  final DiscordPresenceService _discordService = DiscordPresenceService.instance;
 
   // Current folder and video state
   FolderContent? _currentFolderContent;
@@ -553,6 +557,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _currentIndex = index;
       });
 
+      // Update Discord presence based on navigation
+      if (index == 0) {
+        _discordService.setMainMenuStatus();
+      }
+
       // Reset dan jalankan animasi
       _animationController.reset();
       _animationController.forward();
@@ -567,10 +576,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   /// Handle tap pada video
   void _onVideoTap(VideoItem video) {
     if (video.path.isNotEmpty) {
+      debugPrint('HomeScreen - _currentFolderContent?.folderName: ${_currentFolderContent?.folderName}');
+      debugPrint('HomeScreen - _currentFolderContent == null: ${_currentFolderContent == null}');
       Navigator.push(
         context,
         MaterialPageRoute<void>(
-          builder: (context) => VideoPlayerScreen(video: video),
+          builder: (context) => VideoPlayerScreen(
+            video: video,
+            folderName: _currentFolderContent?.folderName,
+            isManuallyPicked: _currentFolderContent == null,
+          ),
         ),
       );
     } else {
@@ -630,6 +645,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _currentFolderContent = folderContent;
         _isLoading = false;
       });
+
+      // Update Discord presence to show folder view
+      debugPrint('HomeScreen - loadVideosFromFolder folderContent.folderName: ${folderContent.folderName}');
+      if (folderContent.folderName.isNotEmpty) {
+        await _discordService.setFolderViewStatus(folderContent.folderName);
+      }
     } catch (e) {
       _handleError(ErrorMessages.videoLoadFailed, e);
     }
@@ -649,6 +670,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _currentFolderContent = folderContent;
         _isLoading = false;
       });
+
+      // Update Discord presence to show folder view
+      if (folderContent.folderName.isNotEmpty) {
+        await _discordService.setFolderViewStatus(folderContent.folderName);
+      }
     } catch (e) {
       _handleError(ErrorMessages.fileSelectionFailed, e);
     }
