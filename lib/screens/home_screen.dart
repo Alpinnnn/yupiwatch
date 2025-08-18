@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:file_picker/file_picker.dart';
 import '../services/video_service.dart';
 import '../services/discord_presence_service.dart';
+import '../services/app_state_service.dart';
 import '../widgets/video_list_widget.dart';
 import '../widgets/folder_list_widget.dart';
 import '../utils/constants.dart';
@@ -25,20 +26,79 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // Video service instance
   final VideoService _videoService = VideoService.instance;
-  
-  // Discord presence service instance
+  //  final VideoService _videoService = VideoService();
   final DiscordPresenceService _discordService = DiscordPresenceService.instance;
+  final AppStateService _appStateService = AppStateService.instance;
 
   // Current folder and video state
   FolderContent? _currentFolderContent;
   bool _isLoading = false;
   String? _errorMessage;
+  
+  // Navigation state for folder browsing
+  List<FolderContent> _folderNavigationStack = [];
+  bool get _canGoBack => _folderNavigationStack.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
     _initializeAnimations();
-    _loadSampleData();
+    _restoreLastState();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Update Discord presence based on current home screen state
+    if (_currentIndex == 0) {
+      _updateDiscordPresenceForCurrentState();
+    }
+  }
+
+  /// Update Discord presence based on current folder state
+  void _updateDiscordPresenceForCurrentState() {
+    if (_currentFolderContent != null && _currentFolderContent!.folderName.isNotEmpty) {
+      // User is viewing a specific folder
+      _discordService.setFolderViewStatus(_currentFolderContent!.folderName);
+    } else {
+      // User is on main menu
+      _discordService.setMainMenuStatus();
+    }
+  }
+
+  /// Restore last app state from saved preferences
+  Future<void> _restoreLastState() async {
+    try {
+      final lastState = await _appStateService.getLastState();
+      if (lastState != null) {
+        if (lastState.type == AppStateType.folder && lastState.folderPath != null) {
+          // Restore folder state - only show folder content, don't open video
+          await _loadFolderContent(lastState.folderPath!, lastState.folderName!);
+          return; // Exit early if state was restored
+        }
+      }
+      // Only load sample data if no state was restored
+      _loadSampleData();
+    } catch (e) {
+      // If restoration fails, load sample data as fallback
+      debugPrint('Failed to restore last state: $e');
+      _loadSampleData();
+    }
+  }
+
+  /// Load folder content by path
+  Future<void> _loadFolderContent(String folderPath, String folderName) async {
+    try {
+      final content = await _videoService.loadVideosFromFolder(folderPath);
+      if (mounted) {
+        setState(() {
+          _currentFolderContent = content;
+        });
+        _discordService.setFolderViewStatus(folderName);
+      }
+    } catch (e) {
+      debugPrint('Failed to load folder content: $e');
+    }
   }
 
   @override
@@ -223,6 +283,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           const EdgeInsets.symmetric(horizontal: AppConstants.paddingLarge),
       child: Row(
         children: [
+          // Back button (shown only when we can go back)
+          if (_canGoBack) ...[
+            IconButton(
+              onPressed: _goBackToParentFolder,
+              icon: Icon(
+                Icons.arrow_back,
+                color: AppColors.textSecondary,
+              ),
+              tooltip: 'Back to Parent Folder',
+            ),
+            const SizedBox(width: AppConstants.paddingSmall),
+          ],
           Icon(
             Icons.folder_outlined,
             color: AppColors.textSecondary,
@@ -559,7 +631,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
       // Update Discord presence based on navigation
       if (index == 0) {
-        _discordService.setMainMenuStatus();
+        _updateDiscordPresenceForCurrentState();
       }
 
       // Reset dan jalankan animasi
@@ -570,11 +642,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   /// Handle tap pada folder
   void _onFolderTap(VideoFolder folder) async {
+    // Save folder state
+    await _appStateService.saveLastScreenState(
+      folderPath: folder.path,
+      folderName: folder.name,
+    );
+    // Save current folder to navigation stack before navigating
+    if (_currentFolderContent != null) {
+      _folderNavigationStack.add(_currentFolderContent!);
+    }
     await _loadVideosFromFolder(folder.path);
   }
 
-  /// Handle tap pada video
-  void _onVideoTap(VideoItem video) {
+  /// Handle tap pada video dari folder
+  void _onVideoTap(VideoItem video) async {
+    // Don't save video state - keep current folder state
     if (video.path.isNotEmpty) {
       debugPrint('HomeScreen - _currentFolderContent?.folderName: ${_currentFolderContent?.folderName}');
       debugPrint('HomeScreen - _currentFolderContent == null: ${_currentFolderContent == null}');
@@ -584,13 +666,42 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           builder: (context) => VideoPlayerScreen(
             video: video,
             folderName: _currentFolderContent?.folderName,
-            isManuallyPicked: _currentFolderContent == null,
+            isManuallyPicked: false,
           ),
         ),
       );
     } else {
       _showMessage(
           'This is a sample video. Select a real folder to play videos.');
+    }
+  }
+
+  /// Handle pemilihan video manual
+  void _onManualVideoSelection(List<String> videoPaths) async {
+    // Save main menu state when selecting individual files
+    await _appStateService.saveLastScreenState();
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final folderContent = await _videoService.loadVideosFromFiles(videoPaths);
+
+      // Clear navigation stack when selecting individual files
+      _folderNavigationStack.clear();
+      
+      setState(() {
+        _currentFolderContent = folderContent;
+        _isLoading = false;
+      });
+
+      // Update Discord presence to show folder view
+      if (folderContent.folderName.isNotEmpty) {
+        await _discordService.setFolderViewStatus(folderContent.folderName);
+      }
+    } catch (e) {
+      _handleError(ErrorMessages.fileSelectionFailed, e);
     }
   }
 
@@ -601,6 +712,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           await FilePicker.platform.getDirectoryPath();
 
       if (selectedDirectory != null) {
+        // Clear navigation stack when selecting new root folder
+        _folderNavigationStack.clear();
         await _loadVideosFromFolder(selectedDirectory);
       }
     } catch (e) {
@@ -630,21 +743,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
-  /// Load video dari folder
+  /// Load video dari folder with progress indicator
   Future<void> _loadVideosFromFolder(String folderPath) async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
 
     try {
       final folderContent =
           await _videoService.loadVideosFromFolder(folderPath);
 
-      setState(() {
-        _currentFolderContent = folderContent;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _currentFolderContent = folderContent;
+          _isLoading = false;
+        });
+      }
 
       // Update Discord presence to show folder view
       debugPrint('HomeScreen - loadVideosFromFolder folderContent.folderName: ${folderContent.folderName}');
@@ -656,20 +773,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
-  /// Load video dari list file
+  /// Navigate back to parent folder
+  void _goBackToParentFolder() {
+    if (_canGoBack && mounted) {
+      setState(() {
+        _currentFolderContent = _folderNavigationStack.removeLast();
+      });
+      
+      // Update Discord presence
+      if (_currentFolderContent?.folderName.isNotEmpty == true) {
+        _discordService.setFolderViewStatus(_currentFolderContent!.folderName);
+      } else {
+        _discordService.setMainMenuStatus();
+      }
+    }
+  }
+
+  /// Load video dari list file with progress indicator
   Future<void> _loadVideosFromFiles(List<String> filePaths) async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
 
     try {
       final folderContent = await _videoService.loadVideosFromFiles(filePaths);
 
-      setState(() {
-        _currentFolderContent = folderContent;
-        _isLoading = false;
-      });
+      // Clear navigation stack when selecting individual files
+      _folderNavigationStack.clear();
+      
+      if (mounted) {
+        setState(() {
+          _currentFolderContent = folderContent;
+          _isLoading = false;
+        });
+      }
 
       // Update Discord presence to show folder view
       if (folderContent.folderName.isNotEmpty) {
@@ -693,13 +833,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   /// Handle error dengan menampilkan pesan yang sesuai
   void _handleError(String message, dynamic error) {
-    setState(() {
-      _isLoading = false;
-      _errorMessage = message;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = message;
+      });
+    }
 
     debugPrint('Error: $message - $error');
-    _showMessage(message);
+    if (mounted) {
+      _showMessage(message);
+    }
   }
 
   /// Menampilkan pesan menggunakan SnackBar

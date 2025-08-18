@@ -30,6 +30,7 @@ class DiscordPresenceService {
   String? _currentVideoName;
   DateTime? _startTime;
   bool _isInitialized = false;
+  bool _isManuallyPicked = false;
   
   // Video progress tracking for progress bar
   Duration? _videoDuration;
@@ -289,6 +290,7 @@ class DiscordPresenceService {
       _currentStatus = status;
       _currentFolderName = folderName;
       _currentVideoName = videoName;
+      _isManuallyPicked = isManuallyPicked;
 
       String details;
       String? state;
@@ -477,9 +479,12 @@ class DiscordPresenceService {
     _currentPosition = position;
     _videoDuration = duration;
     
-    // Update presence to refresh progress bar
+    // Update presence to refresh progress bar with current video info
     if (_currentStatus == AppStatus.videoPlayer && _currentVideoName != null) {
-      await updatePresence(AppStatus.videoPlayer, videoName: _currentVideoName);
+      await updatePresence(AppStatus.videoPlayer, 
+          videoName: _currentVideoName,
+          folderName: _currentFolderName,
+          isManuallyPicked: _isManuallyPicked);
     }
   }
 }

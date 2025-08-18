@@ -3,10 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:pip_view/pip_view.dart';
 import 'dart:io';
+import 'dart:async';
 import '../services/video_service.dart';
 import '../services/discord_presence_service.dart';
 import '../utils/constants.dart';
+import '../widgets/video_list_widget.dart';
+import 'home_screen.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   final VideoItem video;
@@ -32,14 +36,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _isLoading = true;
   String? _errorMessage;
   bool _isFullscreen = false;
+  bool _isPlayerMaximized = true;
+  bool _isPipMode = false;
+  
+  // Timer for auto-hiding controls
+  Timer? _controlsTimer;
   
   // Discord presence service instance
   final DiscordPresenceService _discordService = DiscordPresenceService.instance;
+  
+  // Video service for getting playlist
+  final VideoService _videoService = VideoService.instance;
+  List<VideoItem> _playlistVideos = [];
 
   @override
   void initState() {
     super.initState();
     _initializePlayer();
+    _loadPlaylistVideos();
     
     // Update Discord presence to show video player status
     debugPrint('VideoPlayerScreen - folderName: ${widget.folderName}, isManuallyPicked: ${widget.isManuallyPicked}');
@@ -52,18 +66,22 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   @override
   void dispose() {
-    // Reset Discord presence to main menu when leaving video player
-    _discordService.setMainMenuStatus();
+    // Cancel controls timer
+    _controlsTimer?.cancel();
+    // Don't reset Discord presence automatically - let navigation handle it
+    // _discordService.setMainMenuStatus();
     player.dispose();
     super.dispose();
   }
 
   void _initializePlayer() async {
     try {
-      setState(() {
-        _isLoading = true;
-        _errorMessage = null;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+          _errorMessage = null;
+        });
+      }
 
       // Validasi file
       final videoFile = File(widget.video.path);
@@ -103,24 +121,30 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       await Future.delayed(Duration(milliseconds: 500));
 
       if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
         _startControlsTimer();
       }
     } catch (e) {
       debugPrint('Error initializing player: $e');
       if (mounted) {
         setState(() {
+          _errorMessage = 'Failed to initialize player: ${e.toString()}';
           _isLoading = false;
-          _errorMessage = 'Cannot play this video: ${e.toString()}';
         });
       }
     }
   }
 
   void _startControlsTimer() {
-    Future.delayed(const Duration(seconds: 3), () {
+    // Cancel any existing timer
+    _controlsTimer?.cancel();
+    
+    // Start new timer to hide controls after 3 seconds
+    _controlsTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) {
         setState(() {
           _showControls = false;
@@ -128,20 +152,60 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
     });
   }
+  
+  void _cancelControlsTimer() {
+    _controlsTimer?.cancel();
+  }
 
   @override
   Widget build(BuildContext context) {
+    return PIPView(
+      builder: (context, isFloating) {
+        return _buildMainContent(isFloating);
+      },
+    );
+  }
+
+  Widget _buildMainContent(bool isFloating) {
+    if (isFloating) {
+      // PiP mode - show only video player without any overlays
+      return Material(
+        color: Colors.black,
+        child: _buildContent(),
+      );
+    }
+
+    // Normal mode - show full interface
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          // Video content
-          GestureDetector(
+      body: _isPlayerMaximized ? _buildMaximizedPlayer() : _buildMinimizedPlayer(),
+    );
+  }
+
+  Widget _buildMaximizedPlayer() {
+    return Stack(
+      children: [
+        // Video content with hover detection
+        MouseRegion(
+          onEnter: (_) {
+            setState(() {
+              _showControls = true;
+            });
+            _startControlsTimer();
+          },
+          onExit: (_) {
+            // Don't hide immediately on exit, let timer handle it
+          },
+          child: GestureDetector(
             onTap: () {
               setState(() {
                 _showControls = !_showControls;
               });
-              if (_showControls) _startControlsTimer();
+              if (_showControls) {
+                _startControlsTimer();
+              } else {
+                _cancelControlsTimer();
+              }
             },
             child: Container(
               width: double.infinity,
@@ -152,60 +216,273 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               ),
             ),
           ),
+        ),
 
-          // Top controls overlay
-          if (_showControls)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                height: kToolbarHeight + MediaQuery.of(context).padding.top,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withOpacity(0.7),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-                child: SafeArea(
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                      Expanded(
-                        child: Text(
-                          widget.video.name,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          _isFullscreen
-                              ? Icons.fullscreen_exit
-                              : Icons.fullscreen,
-                          color: Colors.white,
-                        ),
-                        onPressed: _toggleFullscreen,
-                      ),
-                    ],
+        // Top controls overlay with hover detection
+        if (_showControls)
+          MouseRegion(
+            onEnter: (_) {
+              // Keep controls visible when hovering over them
+              _cancelControlsTimer();
+            },
+            onExit: (_) {
+              // Restart timer when leaving controls area
+              _startControlsTimer();
+            },
+            child: _buildTopControls(),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildMinimizedPlayer() {
+    return Column(
+      children: [
+        // Minimized video player
+        Container(
+          height: 200,
+          color: Colors.black,
+          child: Stack(
+            children: [
+              MouseRegion(
+                onEnter: (_) {
+                  setState(() {
+                    _showControls = true;
+                  });
+                  _startControlsTimer();
+                },
+                onExit: (_) {
+                  // Don't hide immediately on exit, let timer handle it
+                },
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _showControls = !_showControls;
+                    });
+                    if (_showControls) {
+                      _startControlsTimer();
+                    } else {
+                      _cancelControlsTimer();
+                    }
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    height: double.infinity,
+                    child: Center(
+                      child: _buildContent(),
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+              if (_showControls)
+                MouseRegion(
+                  onEnter: (_) {
+                    // Keep controls visible when hovering over them
+                    _cancelControlsTimer();
+                  },
+                  onExit: (_) {
+                    // Restart timer when leaving controls area
+                    _startControlsTimer();
+                  },
+                  child: _buildTopControls(),
+                ),
+            ],
+          ),
+        ),
+        
+        // Playlist/content area
+        Expanded(
+          child: Container(
+            color: AppColors.background,
+            child: _buildPlaylistContent(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTopControls() {
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        height: kToolbarHeight + MediaQuery.of(context).padding.top,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withOpacity(0.7),
+              Colors.transparent,
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                onPressed: () {
+                  // Update Discord presence based on navigation context
+                  if (widget.folderName != null && !widget.isManuallyPicked) {
+                    _discordService.setFolderViewStatus(widget.folderName!);
+                  } else {
+                    _discordService.setMainMenuStatus();
+                  }
+                  Navigator.pop(context);
+                },
+              ),
+              Expanded(
+                child: Text(
+                  widget.video.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              // PiP button
+              IconButton(
+                icon: const Icon(Icons.picture_in_picture_alt, color: Colors.white),
+                onPressed: _togglePipMode,
+                tooltip: 'Picture in Picture',
+              ),
+              // Fullscreen/Player Size button (combined functionality)
+              IconButton(
+                icon: Icon(
+                  _isFullscreen
+                      ? Icons.fullscreen_exit
+                      : (_isPlayerMaximized ? Icons.minimize : Icons.fullscreen),
+                  color: Colors.white,
+                ),
+                onPressed: _toggleFullscreenOrPlayerSize,
+                tooltip: _isFullscreen 
+                    ? 'Exit Fullscreen' 
+                    : (_isPlayerMaximized ? 'Minimize Player' : 'Maximize Player'),
+              ),
+            ],
+          ),
+        ),
       ),
+    );
+  }
+
+  Widget _buildPlaylistContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header
+        Padding(
+          padding: const EdgeInsets.all(AppConstants.paddingLarge),
+          child: Row(
+            children: [
+              Icon(
+                Icons.playlist_play,
+                color: AppColors.textSecondary,
+                size: 20,
+              ),
+              const SizedBox(width: AppConstants.paddingSmall),
+              Text(
+                'Now Playing',
+                style: AppTextStyles.h3,
+              ),
+            ],
+          ),
+        ),
+        
+        // Current video info
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppConstants.paddingLarge),
+          child: Container(
+            padding: const EdgeInsets.all(AppConstants.paddingMedium),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(AppConstants.borderRadius),
+              boxShadow: AppShadows.soft,
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 60,
+                  height: 45,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.play_circle_filled,
+                    color: AppColors.primary,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: AppConstants.paddingMedium),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.video.name,
+                        style: AppTextStyles.videoTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${widget.video.duration} • ${widget.video.size}',
+                        style: AppTextStyles.videoMetadata,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: AppConstants.paddingLarge),
+        
+        // Playlist section
+        if (_playlistVideos.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppConstants.paddingLarge),
+            child: Text(
+              'Playlist (${_playlistVideos.length} videos)',
+              style: AppTextStyles.labelLarge,
+            ),
+          ),
+          const SizedBox(height: AppConstants.paddingSmall),
+          Expanded(
+            child: VideoListWidget(
+              videos: _playlistVideos,
+              onVideoTap: _onPlaylistVideoTap,
+            ),
+          ),
+        ] else ...[
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.playlist_remove,
+                    size: 64,
+                    color: AppColors.textTertiary,
+                  ),
+                  const SizedBox(height: AppConstants.paddingMedium),
+                  Text(
+                    'No playlist available',
+                    style: AppTextStyles.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -272,6 +549,79 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         DeviceOrientation.portraitUp,
         DeviceOrientation.portraitDown,
       ]);
+    }
+  }
+
+  void _togglePipMode() {
+    try {
+      setState(() {
+        _isPipMode = !_isPipMode;
+      });
+      
+      if (_isPipMode) {
+        PIPView.of(context)?.presentBelow(const HomeScreen());
+      }
+    } catch (e) {
+      debugPrint('PiP error: $e');
+      // Reset PiP state if error occurs
+      setState(() {
+        _isPipMode = false;
+      });
+    }
+  }
+
+  void _togglePlayerSize() {
+    setState(() {
+      _isPlayerMaximized = !_isPlayerMaximized;
+    });
+  }
+
+  void _toggleFullscreenOrPlayerSize() {
+    if (_isFullscreen) {
+      // Exit fullscreen
+      _toggleFullscreen();
+    } else {
+      // Toggle player size or enter fullscreen
+      if (_isPlayerMaximized) {
+        // If maximized, minimize the player
+        _togglePlayerSize();
+      } else {
+        // If minimized, maximize the player
+        _togglePlayerSize();
+      }
+    }
+  }
+
+  void _onPlaylistVideoTap(VideoItem video) {
+    // Handle playlist video selection
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VideoPlayerScreen(
+          video: video,
+          folderName: widget.folderName,
+          isManuallyPicked: widget.isManuallyPicked,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _loadPlaylistVideos() async {
+    if (widget.folderName != null && !widget.isManuallyPicked) {
+      try {
+        // Try to get videos from the same folder
+        final videoFile = File(widget.video.path);
+        final folderPath = videoFile.parent.path;
+        final folderContent = await _videoService.loadVideosFromFolder(folderPath);
+        
+        setState(() {
+          _playlistVideos = folderContent.videos
+              .where((v) => v.path != widget.video.path)
+              .toList();
+        });
+      } catch (e) {
+        debugPrint('Error loading playlist videos: $e');
+      }
     }
   }
 }
